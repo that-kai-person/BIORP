@@ -11,11 +11,11 @@ frequencies = brp.frequencies
 
 # SAMPLE BIT DATA TRANSMIT
 data = "Hello World!"
-bit_data = brp.bytes_to_bits(bytes(data, 'utf-8'))
+bit_data = brp.bytes_to_bits(bytes(data, 'utf-8'))  # Translation demonstration for input.
 print(bit_data)
-msg = brp.to_protocol(bit_data, mode="10", filetype="Text")
+msg = brp.to_protocol(mode='00')  # TEST MODE -> Send 'Hello World!'
 print(msg)
-audio_data = brp.to_transmit_audio(msg, 1/50, STD_RATE)
+audio_data = brp.to_transmit_audio(msg, 1/50, rate=STD_RATE)
 brp.play_audio(audio_data)
 
 
