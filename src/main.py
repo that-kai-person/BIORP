@@ -1,4 +1,5 @@
 import BIORP_Utilities as brp
+import numpy as np
 
 # STANDARD PARAMETERS
 
@@ -10,14 +11,24 @@ STD_TX = brp.STD_TX
 frequencies = brp.frequencies
 
 # SAMPLE BIT DATA TRANSMIT
-data = "Hello World!"
-bit_data = brp.bytes_to_bits(bytes(data, 'utf-8'))  # Translation demonstration for input.
-print(bit_data)
-msg = brp.to_protocol(mode='00')  # TEST MODE -> Send 'Hello World!'
-print(msg)
-audio_data = brp.to_transmit_audio(msg, 1/50, rate=STD_RATE)
-brp.play_audio(audio_data)
+i = input("TEST/DEBUG SCRIPT - RX or TX? ")
 
+if i == "rx" or i == "RX" or i == "Rx" or i == "rX":
+    print("Running RX test script.")
+    listen_data = np.asarray(brp.listen_record())
+    brp.play_audio(listen_data)
+    
+
+if i == "tx" or i == "TX" or i == "Tx" or i == "tX":
+    print("Running TX test script.")
+    data = "I hate C#"
+    print("TX message: " + data)
+    bit_data = brp.bytes_to_bits(bytes(data, 'utf-8'))  # Translation demonstration for input.
+    print(bit_data)
+    msg = brp.to_protocol(bit_data, mode='01', filetype="Text")  # TEST MODE -> Send 'Hello World!'
+    print(msg)
+    audio_data = brp.to_transmit_audio(msg, 1/50, rate=STD_RATE)
+    brp.play_audio(audio_data)
 
 """
 
@@ -32,7 +43,7 @@ brp.play_audio(audio_data)
                 ? Use SYNC message to slice message to the format & set tx rate (Left as optional)
             * Dissect format and output file to preview/download
         - TRANSMIT
-            * Envelop data with protocol 
+            * Envelop data with protocol V
             * Analyze files (Text, .txt, .jpeg/.jpg/.png and reduce file size
                 (Transmit only data, name, size, aspect ratio etc.)
         - USER INTERFACE

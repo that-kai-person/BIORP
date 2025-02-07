@@ -127,6 +127,7 @@ def round_to_freqs(data: list):
 
 
 def record_audio(record_seconds, chunk=STD_CHUNK, format=STD_FORMAT, channels=STD_CHAN, rate=STD_RATE):
+	#  Example function for stream functionality and usage
 	p = pyaudio.PyAudio()
 
 	stream = p.open(format=format, channels=channels, rate=rate, input=True, frames_per_buffer=chunk)
@@ -145,7 +146,7 @@ def record_audio(record_seconds, chunk=STD_CHUNK, format=STD_FORMAT, channels=ST
 
 
 def listen_record(thresh=500, chunk=STD_CHUNK, format=STD_FORMAT, channels=STD_CHAN, rate=STD_RATE):
-	# Create a buffer to store last 3 secs of audio data
+	# Create a np array buffer to store last 3 secs of audio data
 	buffer_size = rate * 3
 	buffer = np.zeros(buffer_size, dtype=np.int16)
 
@@ -157,8 +158,7 @@ def listen_record(thresh=500, chunk=STD_CHUNK, format=STD_FORMAT, channels=STD_C
 
 	while True:
 		# Take in data from stream
-		data = stream.read(chunk, exception_on_overflow=False)
-		audio_data = np.frombuffer(data, dtype=np.int16)
+		audio_data = np.frombuffer(stream.read(chunk, exception_on_overflow=False), dtype=np.int16)
 
 		# Roll back buffer for new data
 		buffer[:] = np.roll(buffer, -chunk)
@@ -168,13 +168,17 @@ def listen_record(thresh=500, chunk=STD_CHUNK, format=STD_FORMAT, channels=STD_C
 		if rms(buffer.tolist()) >= thresh:
 			if not recording:
 				# New audio activity detected
+				print("PICKED UP SOUND")
 				recording = True
 				return_audio = buffer.copy().tolist()
+			
 			return_audio.extend(audio_data)
+			print("still recording...")
 
-		elif recording:
+		elif recording and rms(buffer.tolist()) <= thresh:
 			# Audio is beneath thresh at end of record
 			recording = False
+			print("END RECORDING")
 			break
 
 	# Close stream
@@ -182,14 +186,34 @@ def listen_record(thresh=500, chunk=STD_CHUNK, format=STD_FORMAT, channels=STD_C
 	stream.close()
 	p.terminate()
 
-	return return_audio
+
+	# Clean output in case of mess-ups below thresh
+	# Find the first index where where we're over thresh
+	start = None
+	for i in range(len(return_audio)):
+		if abs(return_audio[i]) >= thresh:
+			start = i
+			break
+	
+	# Find the last index where we're over thresh
+	end = None
+	for i in range(len(return_audio) - 1, -1, -1):
+		if abs(return_audio[i]) >= thresh:
+			end = i
+			break
+
+	# If no valid sound is found (AKA error), return an empty list
+	if start is None or end is None:
+		return []
+
+	return return_audio[start:end + 1]  # Returns a list
 
 
 def chunk_to_dominant_freq(audio_data: list, rate=STD_RATE):
 	length = len(audio_data)
 
 	# Make input data into np array
-	data = np.array(audio_data)
+	data = np.asarray(audio_data)
 	# Compute FFT result - a list of all different frequencies in the given audio section as complex numbers
 	fft_out = np.fft.fft(data)
 	# Get frequencies for the section
@@ -293,6 +317,7 @@ def handle_rx(chunk=STD_CHUNK, format=STD_FORMAT, channels=STD_CHAN, rate=STD_RA
 
 # Envelop message bit-list in proper protocol headers
 def to_protocol(data_bits: list = bytes_to_bits(bytes('Hello World!', 'utf-8')), mode: str = '00', filetype: str = None, custom_length: int = None):
+	# Planning end/beginning 
 	start_syn = ["SYN", "SYN", "SYN", "SYN", "SYN", "SYN", "SYN", "SYN", "SYN", "SYN"]
 	end_syn = ["SYN", "SYN", "SYN"]
 
@@ -355,11 +380,22 @@ def play_audio(audio_data: np.ndarray, rate=STD_RATE):
 	stream.close()
 	p.terminate()
 
-def ham_msg(call: str = "4X5KD", aff: str = None, qth: tuple = (0, 0)):
-	# Affix is for example 4X/KK7UX
-	# QTH is location, standard lon/lat. Add is like /M, /P, /MM etc.\
+def ham_msg(pre: str = None, call: str = "4X5KD", aff: str = None, qth: tuple = (0, 0), time: int = 0):
+	# Prefix is for example 4X/KK7UX
+	# QTH is location, standard lon:lat. Aff (Affix) is like /M, /P, /MM etc.\
+	# Basic format for HAM mode is: Pre/Call/Aff|QTH|UTC
+	# Time is UTC or more accurately unix time
 
-	bits = []
+	pre_txt = ""
+	aff_txt = ""
+	if pre:
+		pre_txt = "/" + aff
+	if aff:
+		aff_txt = aff + "/"
+
+	data_to_send = pre_txt + call + aff_txt + "|" + qth[0] + ":" + qth[1] + "|" + time
+
+	bits = to_protocol(data_to_send, mode = "01")
 	return bits
 
 
