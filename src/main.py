@@ -1,5 +1,7 @@
 import BIORP_Utilities as brp
 import numpy as np
+import pyaudio
+import tkinter
 
 # STANDARD PARAMETERS
 
@@ -13,13 +15,29 @@ frequencies = brp.frequencies
 # SAMPLE BIT DATA TRANSMIT
 i = input("TEST/DEBUG SCRIPT - RX or TX? ")
 
-if i == "rx" or i == "RX" or i == "Rx" or i == "rX":
+if i.lower() == "rx":
     print("Running RX test script.")
-    listen_data = np.asarray(brp.listen_record())
+    listen_data = np.asarray(brp.listen_record(), dtype=np.int16)
+    i = input("Awaiting input to playback.")
     brp.play_audio(listen_data)
+
+    print("CHECKING VALIDITY")
+
+
+    freqs = brp.to_dominant_freqs(listen_data, STD_CHUNK, STD_RATE)
+    bits = brp.freqs_to_bits(freqs, STD_TX)
+    rx_bytes = brp.bit_protocol_to_bytes(bits)
+    print("BYTE DATA RECEIVED: ", bytes)
+
+    known_data = "I hate C#" # Known sample data
+    true_data_bytes = bytes(known_data)
+    print("BYTE DATA OF KNOWN MESSAGE: ", true_data_bytes)
+
+    print("NO. OF DIFF BETWEEN KNOWN AND RX: ", len(brp.compare_lists(rx_bytes, true_data_bytes)[3]))
+    print("DIFF LIST BETWEEN KNOWN AND RX: ", brp.compare_lists(rx_bytes, true_data_bytes)[3])
     
 
-if i == "tx" or i == "TX" or i == "Tx" or i == "tX":
+if i.lower() == "tx":
     print("Running TX test script.")
     data = "I hate C#"
     print("TX message: " + data)
@@ -58,3 +76,10 @@ if i == "tx" or i == "TX" or i == "Tx" or i == "tX":
             
 
 """
+
+
+
+
+def main_program():
+
+    return

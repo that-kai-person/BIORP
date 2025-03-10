@@ -16,7 +16,7 @@ import ctypes
 
 	SYN | MOD | LEN | DTYPE | CHECKSUM | DATA | END
 
-	SYN - Sync message. 10 SYN tokens.
+	SYN - Sync message. 20 SYN tokens, mainly to key up the VOX and prepare the other side for transmit.
 
 	MOD - Mode of operation. 2 bit code of either:
 		00 - TEST MODE, will transmit a pre-known series of bits.
@@ -49,6 +49,20 @@ frequencies = {"0": 450,
 			   "1": 550,
 			   "SYN": 500}
 
+def compare_lists(list1, list2):
+    set1, set2 = set(list1), set(list2)
+    
+    only_in_list1 = set1 - set2
+    only_in_list2 = set2 - set1
+    common_elements = set1 & set2
+    differences = only_in_list1 | only_in_list2  # כל מה ששונה בין הליסטים
+
+    return {
+        "only_in_list1": list(only_in_list1),
+        "only_in_list2": list(only_in_list2),
+        "common_elements": list(common_elements),
+        "differences": list(differences)  # מה ששונה בין הליסטים
+    }
 
 def bytes_to_bits(input: bytes):  # Convert the bytes received from pyaudio to bits for files
 	bit_list = []
@@ -285,32 +299,33 @@ def freqs_to_bits(freqs: list, tx_rate: int = STD_TX, chunk: int = STD_CHUNK, ra
 			case 550:
 				bit = '1'
 			case _:
-				raise Exception("Unexpected frequency in data.")
+				raise Exception("Unexpected frequency in data. Frequency being: " + bit)
 	
 	return bits
 
-def from_protocol(bit_data: list, custom_len: int = 0):
+def bit_protocol_to_bytes(bit_data: list, custom_start: int = 0, custom_end : int = 0):
 	no_syn = [bit for bit in bit_data if bit != 'SYN']  # Remove 'SYN' tokens
 
 	match no_syn[0]+no_syn[1]:  # Match for mode
 		case '00':  # Test mode
-			data = no_syn[16:]
-		case '01':
-			data = no_syn[16:]
-		case '10':
-			data = no_syn[32:]
-		case '11':
-			data = no_syn[custom_len:]
+			data = no_syn[2+16:]
+		case '01':  # HAM mode
+			data = no_syn[2+16:]
+		case '10':  # Data mode
+			data = no_syn[2+32:]
+		case '11':  # Custom mode
+			data = no_syn[custom_start:custom_end]
 		case _:
 			raise Exception("Incorrect mode data.")
 
-	return data
+	return bits_to_bytes(data)
 
 def handle_rx(chunk=STD_CHUNK, format=STD_FORMAT, channels=STD_CHAN, rate=STD_RATE):
 	data = listen_record(chunk, format, channels, rate)
 	freqs = to_dominant_freqs(data, chunk, rate)
 	bits = freqs_to_bits(freqs, STD_TX)
-	return
+	data_bits = bit_protocol_to_bytes(bits)
+	return data_bits
 
 
 # TX - TRANSMIT
@@ -318,7 +333,7 @@ def handle_rx(chunk=STD_CHUNK, format=STD_FORMAT, channels=STD_CHAN, rate=STD_RA
 # Envelop message bit-list in proper protocol headers
 def to_protocol(data_bits: list = bytes_to_bits(bytes('Hello World!', 'utf-8')), mode: str = '00', filetype: str = None, custom_length: int = None):
 	# Planning end/beginning 
-	start_syn = ["SYN", "SYN", "SYN", "SYN", "SYN", "SYN", "SYN", "SYN", "SYN", "SYN"]
+	start_syn = ["SYN", "SYN", "SYN", "SYN", "SYN", "SYN", "SYN", "SYN", "SYN", "SYN", "SYN", "SYN", "SYN", "SYN", "SYN", "SYN", "SYN", "SYN", "SYN", "SYN"]
 	end_syn = ["SYN", "SYN", "SYN"]
 
 	match mode:
