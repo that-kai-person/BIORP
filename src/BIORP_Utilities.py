@@ -55,13 +55,13 @@ def compare_lists(list1, list2):
     only_in_list1 = set1 - set2
     only_in_list2 = set2 - set1
     common_elements = set1 & set2
-    differences = only_in_list1 | only_in_list2  # כל מה ששונה בין הליסטים
+    differences = only_in_list1 | only_in_list2
 
     return {
         "only_in_list1": list(only_in_list1),
         "only_in_list2": list(only_in_list2),
         "common_elements": list(common_elements),
-        "differences": list(differences)  # מה ששונה בין הליסטים
+        "differences": list(differences)
     }
 
 def bytes_to_bits(input: bytes):  # Convert the bytes received from pyaudio to bits for files
@@ -74,14 +74,15 @@ def bytes_to_bits(input: bytes):  # Convert the bytes received from pyaudio to b
 
 	return bit_list
 
-def bits_to_bytes(input: list) -> bytes:
-	Result : bytes = b''
-	for i in range(len(input) / 8):
-		Byte : bytes = 0
-		for j in range(8):
-			Byte &= input[i + j] << j
-		Result += Byte
-	return Result
+def bits_to_bytes(bits: list[str]) -> bytes:
+    result = bytearray()
+    for i in range(0, len(bits), 8):
+        byte = 0
+        for j in range(8):
+            if i + j < len(bits):
+                byte |= (int(bits[i + j]) << (7 - j))
+        result.append(byte)
+    return bytes(result)
 
 def rms(input: list):
 	return np.sqrt(np.mean(np.square(input)))
@@ -96,18 +97,20 @@ def generate_sine_wave(frequency, duration, rate):
 	return np.sin(2 * np.pi * frequency * t)
 
 
-def calc_checksum(bits: list):
-	# Calculate a 16-bit checksum for a given list of bits.
-	total = 0
-	# Will take 16-bit chunks, convert them into an integer, then sum it into total
-	for i in range(0, len(bits), 16):
-		chunk = bits[i:i + 16]
-		total += int("".join(chunk), 2)
+def calc_checksum(bits: list[str]) -> list[str]:
+    # 1. Guard: no junk in your bit‐list
+    if any(b not in ('0', '1') for b in bits):
+        raise ValueError(f"calc_checksum expected only '0'/'1', got: {bits[:16]}…")
 
-	checksum_value = total % 65536  # Modulo into 16-bit number
-	checksum = list(f"{checksum_value:016b}")  # Return a list containing the 16-bit binary number of the checksum
+    total = 0
+    # 2. Sum 16‐bit chunks
+    for i in range(0, len(bits), 16):
+        chunk = bits[i:i + 16]
+        total += int("".join(chunk), 2)
 
-	return checksum
+    # 3. Modulo into 16 bits, then rebuild a list of '0'/'1'
+    checksum_value = total % 0x10000
+    return list(f"{checksum_value:016b}")
 
 
 def validate_checksum(checksum_plus_data: list):
@@ -137,7 +140,7 @@ def round_to_freqs(data: list):
 	return rounded_list
 
 
-# RX - RECEIVE
+# ------------------------- RX - RECEIVE -------------------------
 
 
 def record_audio(record_seconds, chunk=STD_CHUNK, format=STD_FORMAT, channels=STD_CHAN, rate=STD_RATE):
@@ -228,8 +231,12 @@ def chunk_to_dominant_freq(audio_data: list, rate=STD_RATE):
 
 	# Make input data into np array
 	data = np.asarray(audio_data)
+	# Data cleanup and padding for better fft results
+	windowed = data * np.hamming(len(data))
+	N = 2048
+	padded = np.pad(windowed, (0, N - len(windowed)), 'constant')
 	# Compute FFT result - a list of all different frequencies in the given audio section as complex numbers
-	fft_out = np.fft.fft(data)
+	fft_out = np.fft.fft(padded)
 	# Get frequencies for the section
 	freqs = np.fft.fftfreq(length, d=1 / rate)  # d being the period of sampling
 	# Get different magnitudes for each frequency
@@ -246,13 +253,18 @@ def chunk_to_dominant_freq(audio_data: list, rate=STD_RATE):
 
 
 def to_dominant_freqs(audio_data: list, read_chunk=STD_CHUNK, rate=STD_RATE):
-	freqs = []
-	for i in range(0, len(audio_data) + read_chunk, read_chunk):
-		if i >= len(audio_data):
-			break
-		freqs.append(chunk_to_dominant_freq(audio_data[i:i + read_chunk], rate=rate))
+    """
+    Split the raw audio into chunks for reading, run FFT,
+    and return one dominant frequency per chunk.
+    """
+    freqs = []
+    for start in range(0, len(audio_data), read_chunk):
+        chunk = audio_data[start:start + read_chunk]
+        if len(chunk) < read_chunk:
+            break
+        freqs.append(chunk_to_dominant_freq(chunk, rate=rate))
+    return freqs
 
-	return freqs
 
 
 def find_tx_rate(freqs: list):
@@ -260,48 +272,45 @@ def find_tx_rate(freqs: list):
 	return
 
 
-def freqs_to_bits(freqs: list, tx_rate: int = STD_TX, chunk: int = STD_CHUNK, rate: float = STD_RATE):
+def freqs_to_bits(freqs: list[float],
+                  tx_rate: float = STD_TX,
+                  chunk: int = STD_CHUNK,
+                  rate: float = STD_RATE) -> list[str]:
+    """
+    Turn a time‑series of dominant frequencies into ['0','SYN','1',...] tokens
+	for extraction from protocol and translation to data.
+    """
 
-	"""
-		In this function, we section off the frequencies, then using their corresponding
-		bit values, turn them into binary data. In order to do this, we need to know how many
-		frequency values correspond to a single bit. We have three input variables: Sample rate, sample chunk and TX rate.
+    # How many frequency readings per transmitted bit?
+    #    (chunk/rate) = seconds per frequency sample
+    #    tx_rate    = bits per second
+    #    samples_per_bit = freq‑reads per bit
+    samples_per_bit = max(1, int((chunk / rate) / tx_rate))
 
-		From that we know:
-		Time period for each frequency value = Sample chunk / Sample rate
-		No. of frequency values equivalent to one bit = Time period of frequency value * TX rate
+    # Group into non‑overlapping blocks, each representing one bit
+    grouped = []
+    for i in range(0, len(freqs), samples_per_bit):
+        block = freqs[i:i + samples_per_bit]
+        if len(block) == samples_per_bit:
+            grouped.append(block)
 
-		Now we just divide the frequency list into bit-sized groups and determine the bit value.
-	"""
+    # For each block, compute its RMS “strength” and snap it to 450/500/550
+    tone_avgs = [rms(np.asarray(block)) for block in grouped]
+    snapped = round_to_freqs(tone_avgs)  # yields [450,500,550,...]
 
-	bits = []
-	grouped_freqs = []
+    # Map each snapped tone to a bit‑token
+    bit_tokens = []
+    for f in snapped:
+        if f == 450:
+            bit_tokens.append('0')
+        elif f == 500:
+            bit_tokens.append('SYN')
+        elif f == 550:
+            bit_tokens.append('1')
+        else:
+            raise ValueError(f"Unexpected tone {f} in freqs_to_bits")
 
-	freqs_in_a_bit = (chunk/rate)*tx_rate
-
-	for i in range(0, len(freqs), freqs_in_a_bit):
-		if i == 0:
-			continue
-		else:
-			grouped_freqs.append(freqs[i-5:i])  # Send the bit group to the list
-	
-	for group in grouped_freqs:
-		bits.append(rms(np.asarray(group)))  # For every group, put the rms value into the bits list
-	
-	bits = round_to_freqs(bits)
-
-	for bit in bits:  # Convert to actual bits
-		match bit:
-			case 450:
-				bit = '0'
-			case 500:
-				bit = 'SYN'
-			case 550:
-				bit = '1'
-			case _:
-				raise Exception("Unexpected frequency in data. Frequency being: " + bit)
-	
-	return bits
+    return bit_tokens
 
 def bit_protocol_to_bytes(bit_data: list, custom_start: int = 0, custom_end : int = 0):
 	no_syn = [bit for bit in bit_data if bit != 'SYN']  # Remove 'SYN' tokens
@@ -328,35 +337,61 @@ def handle_rx(chunk=STD_CHUNK, format=STD_FORMAT, channels=STD_CHAN, rate=STD_RA
 	return data_bits
 
 
-# TX - TRANSMIT
+# ------------------------- TX - TRANSMIT -------------------------
 
 # Envelop message bit-list in proper protocol headers
-def to_protocol(data_bits: list = bytes_to_bits(bytes('Hello World!', 'utf-8')), mode: str = '00', filetype: str = None, custom_length: int = None):
-	# Planning end/beginning 
-	start_syn = ["SYN", "SYN", "SYN", "SYN", "SYN", "SYN", "SYN", "SYN", "SYN", "SYN", "SYN", "SYN", "SYN", "SYN", "SYN", "SYN", "SYN", "SYN", "SYN", "SYN"]
-	end_syn = ["SYN", "SYN", "SYN"]
+def to_protocol(payload: str | list[str],
+                mode: str = '00',
+                filetype: str = None,
+                custom_length: list[str] = None) -> list[str]:
+    # Start/End tokens
+    start_syn = ["SYN"] * 20
+    end_syn   = ["SYN"] * 3
 
-	match mode:
-		case "00":
-			len_bits = bytes_to_bits(bytes(ctypes.c_int16(len(data_bits))))
-		case "01":
-			len_bits = bytes_to_bits(bytes(ctypes.c_int16(len(data_bits))))
-		case "10":
-			len_bits = bytes_to_bits(bytes(ctypes.c_int32(len(data_bits))))
-		case "11":
-			len_bits = custom_length
-		case _:
-			len_bits = 0
+    # Turn payload into bits
+    if isinstance(payload, str):
+        data_bits = bytes_to_bits(payload.encode('utf-8'))
+    else:
+        data_bits = payload[:]  # assume list of '0'/'1'
 
-	print(len_bits)
-	mode_bits = bytes_to_bits(bytes(mode, 'utf-8'))
-	if mode =='10':
-		type_bits = bytes_to_bits(bytes(filetype, 'utf-8'))
-	else:
-		type_bits = []
-	checksum_bits = calc_checksum(data_bits)
+    # Mode is two bits: test-'00',ham-'01',data-'10',custom-'11'
+    if mode not in ('00','01','10','11'):
+        raise ValueError("mode must be one of '00','01','10','11'")
+    mode_bits = list(mode)
 
-	return start_syn + mode_bits + len_bits + type_bits + checksum_bits + data_bits + end_syn
+    # Length field: 16‐bit for test/ham modes 00/01, 32‐bit for data mode 10, custom for 11
+    if mode in ('00','01'):
+        length_value = len(data_bits)
+        len_bits = list(f"{length_value & 0xFFFF:016b}")
+    elif mode == '10':
+        length_value = len(data_bits)
+        len_bits = list(f"{length_value & 0xFFFFFFFF:032b}")
+    else:  # '11'
+        if custom_length is None:
+            raise ValueError("custom_length must be provided for mode '11'")
+        len_bits = custom_length
+
+    # Add type bits if in data mode
+    type_bits = []
+    if mode == '10':
+        if not filetype:
+            raise ValueError("filetype is required for DATA mode")
+        type_bits = bytes_to_bits(filetype.encode('utf-8'))
+
+    # Calc checksum for data
+    checksum_bits = calc_checksum(data_bits)
+
+    # Return the assembled data wrapped in protocol
+    return (
+        start_syn
+      + mode_bits
+      + len_bits
+      + type_bits
+      + checksum_bits
+      + data_bits
+      + end_syn
+    )
+
 
 
 #  Transfer between bit list and numpy audio array
@@ -395,24 +430,20 @@ def play_audio(audio_data: np.ndarray, rate=STD_RATE):
 	stream.close()
 	p.terminate()
 
-def ham_msg(pre: str = None, call: str = "4X5KD", aff: str = None, qth: tuple = (0, 0), time: int = 0):
-	# Prefix is for example 4X/KK7UX
-	# QTH is location, standard lon:lat. Aff (Affix) is like /M, /P, /MM etc.\
-	# Basic format for HAM mode is: Pre/Call/Aff|QTH|UTC
+def ham_msg(pre: str = None, call: str = "4X5KD", suff: str = None, qth: tuple = (0.0, 0.0), time: str = "00:00:00"):
+	# Prefix is for example 4X/
+	# QTH is location, standard lon:lat. Suff (Suffix) is like /M, /P, /MM etc.\
+	# Basic format for HAM mode is: Pre/Call/Suff|QTH|UTC
 	# Time is UTC or more accurately unix time
 
 	pre_txt = ""
-	aff_txt = ""
+	suff_txt = ""
 	if pre:
-		pre_txt = "/" + aff
-	if aff:
-		aff_txt = aff + "/"
+		pre_txt = pre + "/"
+	if suff:
+		suff_txt = "/" + suff
 
-	data_to_send = pre_txt + call + aff_txt + "|" + qth[0] + ":" + qth[1] + "|" + time
+	data_to_send = pre_txt + call + suff_txt + "|" + str(qth[0]) + ":" + str(qth[1]) + "|" + time
 
 	bits = to_protocol(data_to_send, mode = "01")
 	return bits
-
-
-def handle_tx(data, time_factor):
-	return
