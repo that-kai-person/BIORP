@@ -30,11 +30,11 @@ if i.lower() == "rx":
     print("BYTE DATA RECEIVED: ", bytes)
 
     known_data = "I hate C#" # Known sample data
-    true_data_bytes = bytes(known_data)
+    true_data_bytes = bytes(known_data, 'utf-8')
     print("BYTE DATA OF KNOWN MESSAGE: ", true_data_bytes)
 
-    print("NO. OF DIFF BETWEEN KNOWN AND RX: ", len(brp.compare_lists(rx_bytes, true_data_bytes)[3]))
-    print("DIFF LIST BETWEEN KNOWN AND RX: ", brp.compare_lists(rx_bytes, true_data_bytes)[3])
+    print("NO. OF DIFF BETWEEN KNOWN AND RX: ", len(brp.compare_lists(rx_bytes, true_data_bytes)["common_elements"]))
+    print("DIFF LIST BETWEEN KNOWN AND RX: ", brp.compare_lists(rx_bytes, true_data_bytes)["differences"])
     
 
 if i.lower() == "tx":
@@ -65,7 +65,7 @@ if i.lower() == "tx":
             * Analyze files (Text, .txt, .jpeg/.jpg/.png and reduce file size
                 (Transmit only data, name, size, aspect ratio etc.)
         - USER INTERFACE
-            * Transmit/Receive pages
+            * Transmit/Receive pages V
             * Current audio level in mic
             * Play to user current input audio from mic
             * Play to user transmitted audio when transmitting
@@ -76,10 +76,3 @@ if i.lower() == "tx":
             
 
 """
-
-
-
-
-def main_program():
-
-    return
