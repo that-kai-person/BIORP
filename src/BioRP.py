@@ -129,7 +129,10 @@ def add_log(rx_tree : ttk.Treeview, UTC : str, Call : str, loc : str, full_msg :
     rx_tree.insert("", "end", values=(UTC, Call, loc, full_msg))
 
 def HAM_receive():
-    print("WIP")
+    rx_audio_data = brp.listen_record()
+    rx_dominant_freqs = brp.to_dominant_freqs(rx_audio_data)
+    rx_bit_data = brp.freqs_to_bits(rx_dominant_freqs)
+    
     return
 
 

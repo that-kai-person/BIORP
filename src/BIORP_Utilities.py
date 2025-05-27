@@ -226,30 +226,36 @@ def listen_record(thresh=500, chunk=STD_CHUNK, format=STD_FORMAT, channels=STD_C
 	return return_audio[start:end + 1]  # Returns a list
 
 
-def chunk_to_dominant_freq(audio_data: list, rate=STD_RATE):
-	length = len(audio_data)
+def chunk_to_dominant_freq(samples:list, sample_rate=STD_RATE):
+    samples = np.asarray(samples)
+    N = 4096
 
-	# Make input data into np array
-	data = np.asarray(audio_data)
-	# Data cleanup and padding for better fft results
-	windowed = data * np.hamming(len(data))
-	N = 2048
-	padded = np.pad(windowed, (0, N - len(windowed)), 'constant')
-	# Compute FFT result - a list of all different frequencies in the given audio section as complex numbers
-	fft_out = np.fft.fft(padded)
-	# Get frequencies for the section
-	freqs = np.fft.fftfreq(length, d=1 / rate)  # d being the period of sampling
-	# Get different magnitudes for each frequency
-	magnitudes = np.abs(fft_out)
-	# Turn all frequencies/magnitudes positive (Symmetry of FFT)
-	freqs = freqs[:length // 2]
-	magnitudes = magnitudes[:length // 2]
+    # Generate Hann window using NumPy
+    hann_window = 0.5 - 0.5 * np.cos(2 * np.pi * np.arange(len(samples)) / (len(samples) - 1))
+    windowed_samples = samples * hann_window
 
-	# Get index of "loudest" frequency and get it
-	dominant_freq_idx = np.argmax(magnitudes)
-	dominant_freq = freqs[dominant_freq_idx]
+    # Zero-padding
+    if len(samples) < N:
+        padded = np.zeros(N)
+        padded[:len(samples)] = windowed_samples
+    else:
+        padded = windowed_samples[:N]
 
-	return dominant_freq
+    # FFT using NumPy
+    fft_result = np.fft.fft(padded)
+    freqs = np.fft.fftfreq(N, d=1.0 / sample_rate)
+
+    magnitudes = np.abs(fft_result[:N // 2])
+    positive_freqs = freqs[:N // 2]
+
+    threshold = np.max(magnitudes) * 0.1
+    valid_indices = np.where(magnitudes > threshold)[0]
+
+    if len(valid_indices) == 0:
+        return 0.0
+
+    peak_index = valid_indices[np.argmax(magnitudes[valid_indices])]
+    return positive_freqs[peak_index]
 
 
 def to_dominant_freqs(audio_data: list, read_chunk=STD_CHUNK, rate=STD_RATE):
@@ -262,7 +268,7 @@ def to_dominant_freqs(audio_data: list, read_chunk=STD_CHUNK, rate=STD_RATE):
         chunk = audio_data[start:start + read_chunk]
         if len(chunk) < read_chunk:
             break
-        freqs.append(chunk_to_dominant_freq(chunk, rate=rate))
+        freqs.append(chunk_to_dominant_freq(chunk, rate))
     return freqs
 
 
@@ -295,7 +301,7 @@ def freqs_to_bits(freqs: list[float],
             grouped.append(block)
 
     # For each block, compute its RMS “strength” and snap it to 450/500/550
-    tone_avgs = [rms(np.asarray(block)) for block in grouped]
+    tone_avgs = [np.mean(block) for block in grouped]
     snapped = round_to_freqs(tone_avgs)  # yields [450,500,550,...]
 
     # Map each snapped tone to a bit‑token
