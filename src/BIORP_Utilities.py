@@ -132,12 +132,19 @@ def validate_checksum(checksum_plus_data: list):
 
 
 def round_to_freqs(data: list):
-	frequencies_list = [450, 500, 550]
-	rounded_list = []
-	for cell in data:
-		rounded_cell = min(frequencies_list, key=lambda x: abs(cell - x))
-		rounded_list.append(rounded_cell)
-	return rounded_list
+    rounded_list = []
+    for cell in data:
+        if cell > 600 or cell < 400:
+            continue
+        if 443 <= cell <= 457:
+            rounded_list.append(450)
+        elif 543 <= cell <= 557:
+            rounded_list.append(550)
+        elif 493 <= cell <= 507:
+            rounded_list.append(500)
+    return rounded_list
+
+
 
 
 # ------------------------- RX - RECEIVE -------------------------

@@ -35,7 +35,8 @@ if i.lower() == "rx":
     known_data = "I hate C#" # Known sample data
     true_data_bytes = bytes(known_data, 'utf-8')
     print("BYTE DATA OF KNOWN MESSAGE: ", true_data_bytes)
-    true_data_freqs = brp.to_transmit_audio(brp.bytes_to_bits(true_data_bytes))
+    true_data_bits = brp.bytes_to_bits(true_data_bytes)
+    true_data_freqs = brp.to_protocol(true_data_bits, mode='01', filetype="Text")
     print("TRUE DATA FREQS: ", true_data_freqs)
 
     print("NO. OF DIFF BETWEEN KNOWN AND RX: ", len(brp.compare_lists(rx_bytes, true_data_bytes)["common_elements"]))
@@ -50,7 +51,7 @@ if i.lower() == "tx":
     print(bit_data)
     msg = brp.to_protocol(bit_data, mode='01', filetype="Text")  # TEST MODE -> Send 'Hello World!'
     print(msg)
-    audio_data = brp.to_transmit_audio(msg, 1/10, rate=STD_RATE)
+    audio_data = brp.to_transmit_audio(msg, 1/100, rate=STD_RATE)
     brp.play_audio(audio_data)
 
 """
