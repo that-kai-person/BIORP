@@ -40,13 +40,13 @@ import ctypes
 # STANDARD PARAMETERS
 
 STD_FORMAT = pyaudio.paInt16  # Sampling format for RX
-STD_CHUNK = 1024  # Sampling chunk for RX
 STD_CHAN = 1  # 1 for mono, 2 for stereo. UV-K6 does NOT work with stereo.
 STD_RATE = 44100  # Sample rate for RX
-STD_TX = 1/100  # 100 bit per second (BpSec) TX rate
+STD_TX = 1/25  # 100 bit per second (BpSec) TX rate
+STD_CHUNK = int(STD_RATE*STD_TX)  # Sampling chunk for RX
 
-frequencies = {"0": 450,
-			   "1": 550,
+frequencies = {"0": 400,
+			   "1": 600,
 			   "SYN": 500}
 
 def compare_lists(list1, list2):
@@ -131,16 +131,16 @@ def validate_checksum(checksum_plus_data: list):
 	return corrupted, corrupted_count
 
 
-def round_to_freqs(data: list):
+def round_to_freqs(data: list): # +- 20Hz error mrgain for data, with an 80Hz error margain for SYN
     rounded_list = []
     for cell in data:
-        if cell > 600 or cell < 400:
+        if cell > 620 or cell < 380:
             continue
-        if 443 <= cell <= 457:
-            rounded_list.append(450)
-        elif 543 <= cell <= 557:
-            rounded_list.append(550)
-        elif 493 <= cell <= 507:
+        if 380 <= cell <= 420:
+            rounded_list.append(400)
+        elif 580 <= cell <= 620:
+            rounded_list.append(600)
+        elif 421 <= cell <= 579:
             rounded_list.append(500)
     return rounded_list
 
@@ -233,27 +233,26 @@ def listen_record(thresh=500, chunk=STD_CHUNK, format=STD_FORMAT, channels=STD_C
 	return return_audio[start:end + 1]  # Returns a list
 
 
-def chunk_to_dominant_freq(samples:list, sample_rate=STD_RATE):
+def chunk_to_dominant_freq(samples:list, sample_rate=STD_RATE, chunk=STD_CHUNK):
     samples = np.asarray(samples)
-    N = 4096
 
     # Generate Hann window using NumPy
     hann_window = 0.5 - 0.5 * np.cos(2 * np.pi * np.arange(len(samples)) / (len(samples) - 1))
     windowed_samples = samples * hann_window
 
     # Zero-padding
-    if len(samples) < N:
-        padded = np.zeros(N)
+    if len(samples) < chunk:
+        padded = np.zeros(chunk)
         padded[:len(samples)] = windowed_samples
     else:
-        padded = windowed_samples[:N]
+        padded = windowed_samples[:chunk]
 
     # FFT using NumPy
     fft_result = np.fft.fft(padded)
-    freqs = np.fft.fftfreq(N, d=1.0 / sample_rate)
+    freqs = np.fft.fftfreq(chunk, d=1.0 / sample_rate)
 
-    magnitudes = np.abs(fft_result[:N // 2])
-    positive_freqs = freqs[:N // 2]
+    magnitudes = np.abs(fft_result[:chunk // 2])
+    positive_freqs = freqs[:chunk // 2]
 
     threshold = np.max(magnitudes) * 0.1
     valid_indices = np.where(magnitudes > threshold)[0]
@@ -289,44 +288,47 @@ def freqs_to_bits(freqs: list[float],
                   tx_rate: float = STD_TX,
                   chunk: int = STD_CHUNK,
                   rate: float = STD_RATE) -> list[str]:
-    """
-    Turn a time‑series of dominant frequencies into ['0','SYN','1',...] tokens
+	"""
+	Turn a time‑series of dominant frequencies into ['0','SYN','1',...] tokens
 	for extraction from protocol and translation to data.
-    """
+	"""
+	# REMOVE INVALID SILENT FREQUENCIES
+	freqs = [f for f in freqs if f > 0]
+	# How many frequency readings per transmitted bit?
+	#    (chunk/rate) = seconds per frequency sample
+	#    tx_rate    = bits per second
+	#    samples_per_bit = freq‑reads per bit
+	samples_per_bit = max(1, round((chunk / rate) / tx_rate))
 
-    # How many frequency readings per transmitted bit?
-    #    (chunk/rate) = seconds per frequency sample
-    #    tx_rate    = bits per second
-    #    samples_per_bit = freq‑reads per bit
-    samples_per_bit = max(1, int((chunk / rate) / tx_rate))
-
-    # Group into non‑overlapping blocks, each representing one bit
-    grouped = []
-    for i in range(0, len(freqs), samples_per_bit):
-        block = freqs[i:i + samples_per_bit]
-        if len(block) == samples_per_bit:
-            grouped.append(block)
+	# Group into non‑overlapping blocks, each representing one bit
+	grouped = []
+	for i in range(0, len(freqs), samples_per_bit):
+		block = freqs[i:i + samples_per_bit]
+		if len(block) == samples_per_bit:
+			grouped.append(block)
 
     # For each block, compute its RMS “strength” and snap it to 450/500/550
-    tone_avgs = [np.mean(block) for block in grouped]
-    snapped = round_to_freqs(tone_avgs)  # yields [450,500,550,...]
+	tone_avgs = [np.mean(block) for block in grouped]
+	snapped = round_to_freqs(tone_avgs)  # yields [450,500,550,...]
 
-    # Map each snapped tone to a bit‑token
-    bit_tokens = []
-    for f in snapped:
-        if f == 450:
-            bit_tokens.append('0')
-        elif f == 500:
-            bit_tokens.append('SYN')
-        elif f == 550:
-            bit_tokens.append('1')
-        else:
-            raise ValueError(f"Unexpected tone {f} in freqs_to_bits")
+	# Map each snapped tone to a bit‑token
+	bit_tokens = []
+	for f in snapped:
+		if f == 400:
+			bit_tokens.append('0')
+		elif f == 500:
+			bit_tokens.append('SYN')
+		elif f == 600:
+			bit_tokens.append('1')
+		else:
+			raise ValueError(f"Unexpected tone {f} in freqs_to_bits")
 
-    return bit_tokens
+	return bit_tokens
 
 def bit_protocol_to_bytes(bit_data: list, custom_start: int = 0, custom_end : int = 0):
 	no_syn = [bit for bit in bit_data if bit != 'SYN']  # Remove 'SYN' tokens
+
+	if len(no_syn) < 2:	raise ValueError("Too few bits to determine mode.")
 
 	match no_syn[0]+no_syn[1]:  # Match for mode
 		case '00':  # Test mode
