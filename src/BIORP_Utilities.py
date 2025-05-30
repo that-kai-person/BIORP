@@ -345,10 +345,13 @@ def bit_protocol_to_bytes(bit_data: list, custom_start: int = 0, custom_end : in
 	return bits_to_bytes(data)
 
 def handle_rx(chunk=STD_CHUNK, format=STD_FORMAT, channels=STD_CHAN, rate=STD_RATE):
-	data = listen_record(chunk, format, channels, rate)
-	freqs = to_dominant_freqs(data, chunk, rate)
-	bits = freqs_to_bits(freqs, STD_TX)
-	data_bits = bit_protocol_to_bytes(bits)
+	print("Running RX script.")
+	data = np.asarray(listen_record(chunk=chunk,channels=channels, rate=rate), dtype=np.int16) # Receive audio data
+	freqs = to_dominant_freqs(data, chunk, rate) # Convert from raw data to frequencies
+	print("RX FREQ DATA: ", freqs)
+	bits = freqs_to_bits(freqs, STD_TX) # Convert from frequencies to bits
+	print("RX BIT DATA: ", bits)
+	data_bits = bit_protocol_to_bytes(bits) # Extract
 	return data_bits
 
 
@@ -431,6 +434,16 @@ def to_transmit_audio(bits: list, time_factor=STD_TX, rate=STD_RATE):
 	audio_data = np.int16(audio_data * 32767)  # Return to 16-bit
 
 	return audio_data
+
+def handle_tx(data = "I hate C#", mode: str = '01', filetype: str = "Text"):
+	print("Running TX script.")
+	print("TX message: " + data)
+	bit_data = bytes_to_bits(bytes(data, 'utf-8'))  # Translation demonstration for input.
+	print(bit_data)
+	msg = to_protocol(bit_data, mode, filetype)  # TEST MODE -> Send 'Hello World!'
+	print(msg)
+	audio_data = to_transmit_audio(msg, STD_TX, rate=STD_RATE)
+	play_audio(audio_data)
 
 
 # Play a given numpy array that has been processed by the to_transmit_audio function
