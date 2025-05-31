@@ -5,9 +5,10 @@ import BIORP_Utilities as brp
 import tkinter as tk
 from tkinter import ttk
 from tkinter import messagebox
-from datetime import datetime
+from datetime import datetime, timezone
 import threading
 import pyaudio
+import numpy
 
 root = tk.Tk() # Create and name the window
 root.title("BioRP by 4X5KD")
@@ -85,7 +86,7 @@ tabControl.pack(expand = 1, fill ="both")
 
 # FUNCTIONS
 def update_utc_clock():
-    now_utc = datetime.utcnow().strftime("UTC %H:%M:%S")
+    now_utc = datetime.now(timezone.utc).strftime("UTC %H:%M:%S")
     utc_clock_label_ham.config(text=now_utc)
     utc_clock_label_rx.config(text=now_utc)
     utc_clock_label_tx.config(text=now_utc)
@@ -97,8 +98,8 @@ def HAM_transmit():
     if rx_running: # No TX while RX
         return
     
-    if tx_running: # Stop TX if pressed again
-        print("TX END")
+    if tx_running:
+        print("[TX] Already running. Ignoring second click.")
         tx_running = False
         return
 
@@ -129,7 +130,7 @@ def HAM_transmit():
         return
 
     # Build message
-    time_str = datetime.utcnow().strftime("%H:%M:%S")
+    time_str = datetime.now(timezone.utc).strftime("%H:%M:%S")
     msg = brp.ham_msg(
         pre=prefix,
         call=station_call,
@@ -139,9 +140,14 @@ def HAM_transmit():
     )
 
     # Transmit in background so we don't freeze the GUI
+    print("STARTING TRANSMISSION SETUP")
     audio_data = brp.to_transmit_audio(brp.to_protocol(msg, mode='01'))
+    print("AUDIO DATA LENGTH:", len(audio_data))
+    
+    tx_running = True
 
     def _do_tx():
+        print("TX THREAD START")
         global tx_running
         HAM_tx_btn.config(text="Transmitting...", bg="orange red")
         HAM_rx_btn.config(state="disabled")
@@ -161,9 +167,11 @@ def HAM_transmit():
             stream.close()
             p.terminate()
 
+            
             tx_running = False
             HAM_tx_btn.config(text="TRANSMIT", bg="SystemButtonFace")
             HAM_rx_btn.config(state="normal")
+            print("TX END")
 
 
     tx_thread = threading.Thread(target=_do_tx, daemon=True)
