@@ -10,6 +10,7 @@ import threading
 
 root = tk.Tk() # Create and name the window
 root.title("BioRP by 4X5KD")
+root.iconphoto(False, tk.PhotoImage(file="src/top_icon.png"))
 root.minsize(800, 400)
 tabControl = ttk.Notebook(root) # Tab control
 
@@ -132,7 +133,7 @@ def HAM_receive():
     rx_audio_data = brp.listen_record()
     rx_dominant_freqs = brp.to_dominant_freqs(rx_audio_data)
     rx_bit_data = brp.freqs_to_bits(rx_dominant_freqs)
-    
+
     return
 
 

@@ -16,8 +16,10 @@ frequencies = brp.frequencies
 i = input("TEST/DEBUG SCRIPT - RX or TX? ")
 
 if i.lower() == "rx":
-    rx_data = brp.handle_rx()
-    print(rx_data)
+    rx_data, mode, filetype = brp.handle_rx()
+    print("DATA: ", rx_data)
+    print("MODE: ", mode)
+    print("FILE TYPE:", filetype)
     
 
 if i.lower() == "tx":

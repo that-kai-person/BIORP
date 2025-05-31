@@ -174,6 +174,7 @@ def listen_record(thresh=500, chunk=STD_CHUNK, format=STD_FORMAT, channels=STD_C
 	buffer_size = rate * 3
 	buffer = np.zeros(buffer_size, dtype=np.int16)
 
+	# Open a data stream
 	p = pyaudio.PyAudio()
 	stream = p.open(format=format, channels=channels, rate=rate, input=True, frames_per_buffer=chunk)
 
@@ -251,11 +252,12 @@ def chunk_to_dominant_freq(samples:list, sample_rate=STD_RATE, chunk=STD_CHUNK):
     fft_result = np.fft.fft(padded)
     freqs = np.fft.fftfreq(chunk, d=1.0 / sample_rate)
 
+	# Shape waveform for manipulation (Flip all negatives)
     magnitudes = np.abs(fft_result[:chunk // 2])
     positive_freqs = freqs[:chunk // 2]
 
-    threshold = np.max(magnitudes) * 0.1
-    valid_indices = np.where(magnitudes > threshold)[0]
+    threshold = np.max(magnitudes) * 0.1 # Get the thresh of the maximal intensity freq
+    valid_indices = np.where(magnitudes > threshold)[0] # Get dominant freq using thresh
 
     if len(valid_indices) == 0:
         return 0.0
@@ -330,19 +332,45 @@ def bit_protocol_to_bytes(bit_data: list, custom_start: int = 0, custom_end : in
 
 	if len(no_syn) < 2:	raise ValueError("Too few bits to determine mode.")
 
-	match no_syn[0]+no_syn[1]:  # Match for mode
-		case '00':  # Test mode
-			data = no_syn[2+16:]
-		case '01':  # HAM mode
-			data = no_syn[2+16:]
-		case '10':  # Data mode
-			data = no_syn[2+32:]
-		case '11':  # Custom mode
-			data = no_syn[custom_start:custom_end]
-		case _:
-			raise Exception("Incorrect mode data.")
+	mode_bits = no_syn[0:2] # Extract mode bits
+	mode = ''.join(mode_bits) # Make into string
 
-	return bits_to_bytes(data)
+	match mode:  # Match for mode
+		case '00' | '01':  # Test mode and HAM mode
+			len_bits = no_syn[2:18]
+			length = int(''.join(len_bits),2)
+
+			checksum = no_syn[18:34]
+			data_bits = no_syn[34:34+length]
+
+			corrupted, corrupted_count = validate_checksum(data_bits + checksum)
+			if corrupted:
+				raise ValueError("Corruption detected! Checksum mismatch: ", corrupted_count, " bits wrong.")
+			
+			return bits_to_bytes(data_bits), mode, None
+		
+		case '10':  # Data mode
+			len_bits = no_syn[2:34]
+			length = int(''.join(len_bits),2)
+
+			filetype_bits = no_syn[34:66] # 4 bytes = 32 bits
+			filetype = bits_to_bytes(filetype_bits).decode('utf-8', errors='replace').strip('\x00')
+
+			checksum = no_syn[66:82]
+			data_bits = no_syn[82:82+length]
+
+			corrupted, corrupted_count = validate_checksum(data_bits + checksum)
+			if corrupted:
+				raise ValueError("Corruption detected! Checksum mismatch: ", corrupted_count, " bits wrong.")
+
+			return bits_to_bytes(data_bits), mode, filetype
+
+		case '11':  # Custom mode
+			data_bits = no_syn[custom_start:custom_end]
+			return bits_to_bytes(data_bits), mode, None	
+		
+		case _:
+			raise Exception("Incorrect mode bits: ", mode)
 
 def handle_rx(chunk=STD_CHUNK, format=STD_FORMAT, channels=STD_CHAN, rate=STD_RATE):
 	print("Running RX script.")
@@ -351,8 +379,8 @@ def handle_rx(chunk=STD_CHUNK, format=STD_FORMAT, channels=STD_CHAN, rate=STD_RA
 	print("RX FREQ DATA: ", freqs)
 	bits = freqs_to_bits(freqs, STD_TX) # Convert from frequencies to bits
 	print("RX BIT DATA: ", bits)
-	data_bits = bit_protocol_to_bytes(bits) # Extract
-	return data_bits
+	data_bits, mode, filetype = bit_protocol_to_bytes(bits) # Extract
+	return data_bits, mode, filetype
 
 
 # ------------------------- TX - TRANSMIT -------------------------
@@ -435,9 +463,9 @@ def to_transmit_audio(bits: list, time_factor=STD_TX, rate=STD_RATE):
 
 	return audio_data
 
-def handle_tx(data = "I hate C#", mode: str = '01', filetype: str = "Text"):
+def handle_tx(data = "I hate C#", mode: str = '10', filetype: str = "Text"):
 	print("Running TX script.")
-	print("TX message: " + data)
+	print("TX message: ",  data)
 	bit_data = bytes_to_bits(bytes(data, 'utf-8'))  # Translation demonstration for input.
 	print(bit_data)
 	msg = to_protocol(bit_data, mode, filetype)  # TEST MODE -> Send 'Hello World!'
@@ -472,6 +500,4 @@ def ham_msg(pre: str = None, call: str = "4X5KD", suff: str = None, qth: tuple =
 		suff_txt = "/" + suff
 
 	data_to_send = pre_txt + call + suff_txt + "|" + str(qth[0]) + ":" + str(qth[1]) + "|" + time
-
-	bits = to_protocol(data_to_send, mode = "01")
-	return bits
+	return data_to_send
