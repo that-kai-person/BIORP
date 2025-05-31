@@ -7,6 +7,7 @@ from tkinter import ttk
 from tkinter import messagebox
 from datetime import datetime
 import threading
+import pyaudio
 
 root = tk.Tk() # Create and name the window
 root.title("BioRP by 4X5KD")
@@ -14,8 +15,20 @@ root.iconphoto(False, tk.PhotoImage(file="src/top_icon.png"))
 root.minsize(800, 400)
 tabControl = ttk.Notebook(root) # Tab control
 
+# ------------ GLOBAL PARAMS ------------
 
+rx_running = False
+rx_thread = None
 
+tx_running = False
+tx_thread = None
+
+STD_FORMAT = brp.STD_FORMAT
+STD_CHUNK = brp.STD_CHUNK
+STD_CHAN = brp.STD_CHAN
+STD_RATE = brp.STD_RATE
+STD_TX = brp.STD_TX
+frequencies = brp.frequencies
 
 # ------------ MENUS ------------
 
@@ -25,12 +38,12 @@ def toggleView():
     global is_full_view
     if is_full_view:
         # Switch to HAM mode (remove RX and TX)
-        tabControl.forget(RX_tab)
-        tabControl.forget(TX_tab)
+        tabControl.forget(TEXT_tab)
+        tabControl.forget(IMG_tab)
     else:
         # Switch to FULL mode (add RX and TX back)
-        tabControl.add(RX_tab, text='RX')
-        tabControl.add(TX_tab, text='TX')
+        tabControl.add(TEXT_tab, text='TEXT')
+        tabControl.add(IMG_tab, text='WIP')
     is_full_view = not is_full_view
 
 # MENU CONFIG
@@ -54,14 +67,14 @@ view_menu.add_command(label="Toggle view", command=toggleView)
 
 # ------------ TAB CONTROL ------------
 # Creating tabs for RX/TX/HAM modes
-RX_tab = ttk.Frame(tabControl)
-TX_tab = ttk.Frame(tabControl)
+TEXT_tab = ttk.Frame(tabControl)
+IMG_tab = ttk.Frame(tabControl)
 HAM_tab = ttk.Frame(tabControl)
 
 # Adding tabs to tab control
 tabControl.add(HAM_tab, text ='HAM')
-tabControl.add(RX_tab, text ='RX') 
-tabControl.add(TX_tab, text ='TX') 
+tabControl.add(TEXT_tab, text ='TEXT') 
+tabControl.add(IMG_tab, text ='WIP') 
 tabControl.pack(expand = 1, fill ="both")
 
 
@@ -79,6 +92,16 @@ def update_utc_clock():
     root.after(1000, update_utc_clock)
 
 def HAM_transmit():
+    global tx_running, tx_thread, rx_running
+
+    if rx_running: # No TX while RX
+        return
+    
+    if tx_running: # Stop TX if pressed again
+        print("TX END")
+        tx_running = False
+        return
+
     # Get inputs
     prefix = prefix_entry.get().strip() or None
     station_call = stationcall_entry.get().strip()
@@ -107,34 +130,96 @@ def HAM_transmit():
 
     # Build message
     time_str = datetime.utcnow().strftime("%H:%M:%S")
-    bits = brp.ham_msg(
+    msg = brp.ham_msg(
         pre=prefix,
         call=station_call,
         suff=suffix,
         qth=(lon, lat),
         time=time_str
     )
-    audio_data = brp.to_transmit_audio(bits)
 
     # Transmit in background so we don't freeze the GUI
-    def _do_tx():
-        HAM_tx_btn.config(text="Transmitting...", bg="red")
-        try:
-            brp.play_audio(audio_data=audio_data)
-        finally:
-            HAM_tx_btn.config(text="Transmit", bg="SystemButtonFace")
+    audio_data = brp.to_transmit_audio(brp.to_protocol(msg, mode='01'))
 
-    threading.Thread(target=_do_tx, daemon=True).start()
+    def _do_tx():
+        global tx_running
+        HAM_tx_btn.config(text="Transmitting...", bg="orange red")
+        HAM_rx_btn.config(state="disabled")
+
+        p = pyaudio.PyAudio()
+        stream = p.open(format=STD_FORMAT, channels=STD_CHAN, rate=STD_RATE, output=True)
+
+        try:
+            pos = 0
+            chunk = STD_CHUNK
+            while tx_running and pos < len(audio_data):
+                end = min(pos + chunk, len(audio_data))
+                stream.write(audio_data[pos:end].tobytes())
+                pos = end
+        finally:
+            stream.stop_stream()
+            stream.close()
+            p.terminate()
+
+            tx_running = False
+            HAM_tx_btn.config(text="TRANSMIT", bg="SystemButtonFace")
+            HAM_rx_btn.config(state="normal")
+
+
+    tx_thread = threading.Thread(target=_do_tx, daemon=True)
+    tx_thread.start()
 
 def add_log(rx_tree : ttk.Treeview, UTC : str, Call : str, loc : str, full_msg : str):
     rx_tree.insert("", "end", values=(UTC, Call, loc, full_msg))
 
 def HAM_receive():
-    rx_audio_data = brp.listen_record()
-    rx_dominant_freqs = brp.to_dominant_freqs(rx_audio_data)
-    rx_bit_data = brp.freqs_to_bits(rx_dominant_freqs)
+    global rx_running, rx_thread, tx_running
 
-    return
+    if tx_running: # No RX while TX
+        return
+
+    def _do_rx():
+        global rx_running
+        HAM_rx_btn.config(text="Receiving...", bg="royal blue")
+        HAM_tx_btn.config(state="disabled")
+
+        while rx_running:
+            try:
+
+                data_bytes, mode, filetype = brp.handle_rx()
+                if mode != '01': # Received non-HAM message.
+                    print("Non-HAM message received, continuing RX.")
+                    continue
+                
+                # Decode data
+                msg = data_bytes.decode('utf-8', errors='replace')
+                print("HAM MESSAGE:", msg)
+
+                try: # Parsing the message
+                    call, loc, utc_time = msg.split("|")
+                except ValueError:
+                    print("Invalid HAM format")
+                    break
+
+                add_log(HAM_rx_tree, utc_time, call, loc, msg)
+                break
+            except Exception as e:
+                print("Error in HAM_receive(): ", e)
+                break
+        
+        rx_running = False
+        # Return buttons to normal state
+        HAM_rx_btn.config(text="RECEIVE", bg="SystemButtonFace")
+        HAM_tx_btn.config(state="normal")
+    
+    if rx_running: # Stop RX if pressed again
+        print("RX END")
+        rx_running = False
+    else: # First press to begin RX
+        print("RX BEGIN")
+        rx_running = True
+        rx_thread = threading.Thread(target=_do_rx, daemon=True)
+        rx_thread.start()
 
 
 # TAB CONSTRUCTION
@@ -183,39 +268,39 @@ HAM_tab.grid_rowconfigure(4, weight=1)
 add_log(HAM_rx_tree, "12:10:12", "4X/RU8SX/MM", "12, 31","TEST")
 
 
-# ------------ RX TAB ------------
+# ------------ TEXT TAB ------------
 
 # FUNCTIONS
 
-def RX_receive():
+def TEXT_receive():
     print("WIP")
     return
 
 # TAB CONSTRUCTION
 
-tk.Label(RX_tab, text="RX", height=1, width=4, bd=4, relief="solid", font=("Helvetica",24, "bold")).grid(column=0, row=0, sticky="w")
-utc_clock_label_rx = tk.Label(RX_tab, font=("Helvetica", 22, "bold"))
+tk.Label(TEXT_tab, text="TEXT", height=1, width=4, bd=4, relief="solid", font=("Helvetica",24, "bold")).grid(column=0, row=0, sticky="w")
+utc_clock_label_rx = tk.Label(TEXT_tab, font=("Helvetica", 22, "bold"))
 utc_clock_label_rx.grid(column=6, row=0, columnspan=2, pady=3, sticky="e")
-RX_btn = tk.Button(RX_tab, width=20,text="RECEIVE", font=("Helvetica", 9, "bold"), command=RX_receive)
+RX_btn = tk.Button(TEXT_tab, width=20,text="RECEIVE", font=("Helvetica", 9, "bold"), command=TEXT_receive)
 RX_btn.grid(column=0, row=1, pady=4, sticky="w")
 
 for i in range(7):
-    RX_tab.grid_columnconfigure(i, weight=1)
+    TEXT_tab.grid_columnconfigure(i, weight=1)
 
 
-# ------------ TX TAB ------------
+# ------------ IMG TAB ------------
 
 # FUNCTIONS
 
 
 # TAB CONSTRUCTION
 
-tk.Label(TX_tab, text="TX", height=1, width=4, bd=4, relief="solid", font=("Helvetica",24, "bold")).grid(column=0, row=0, sticky="w")
-utc_clock_label_tx = tk.Label(TX_tab, font=("Helvetica", 22, "bold"))
+tk.Label(IMG_tab, text="IMG", height=1, width=4, bd=4, relief="solid", font=("Helvetica",24, "bold")).grid(column=0, row=0, sticky="w")
+utc_clock_label_tx = tk.Label(IMG_tab, font=("Helvetica", 22, "bold"))
 utc_clock_label_tx.grid(column=6, row=0, columnspan=2, pady=3, sticky="e")
 
 for i in range(7):
-    TX_tab.grid_columnconfigure(i, weight=1)
+    IMG_tab.grid_columnconfigure(i, weight=1)
 
 update_utc_clock()
 root.mainloop()
