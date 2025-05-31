@@ -42,7 +42,7 @@ import ctypes
 STD_FORMAT = pyaudio.paInt16  # Sampling format for RX
 STD_CHAN = 1  # 1 for mono, 2 for stereo. UV-K6 does NOT work with stereo.
 STD_RATE = 44100  # Sample rate for RX
-STD_TX = 1/25  # 100 bit per second (BpSec) TX rate
+STD_TX = 1/15  # 100 bit per second (BpSec) TX rate
 STD_CHUNK = int(STD_RATE*STD_TX)  # Sampling chunk for RX
 
 frequencies = {"0": 400,
@@ -345,8 +345,10 @@ def bit_protocol_to_bytes(bit_data: list, custom_start: int = 0, custom_end : in
 
 			corrupted, corrupted_count = validate_checksum(data_bits + checksum)
 			if corrupted:
-				raise ValueError("Corruption detected! Checksum mismatch: ", corrupted_count, " bits wrong.")
-			
+				print("Warning: Checksum mismatch", corrupted_count, " bits wrong). Proceeding anyway for debug.")
+			print("DATA BITS:", data_bits)
+			print("EXPECTED CHECKSUM:", calc_checksum(data_bits))
+			print("RECEIVED CHECKSUM:", checksum)
 			return bits_to_bytes(data_bits), mode, None
 		
 		case '10':  # Data mode
@@ -361,8 +363,12 @@ def bit_protocol_to_bytes(bit_data: list, custom_start: int = 0, custom_end : in
 
 			corrupted, corrupted_count = validate_checksum(data_bits + checksum)
 			if corrupted:
-				raise ValueError("Corruption detected! Checksum mismatch: ", corrupted_count, " bits wrong.")
+				print("Warning: Checksum mismatch", corrupted_count, " bits wrong). Proceeding anyway for debug.")
 
+			print("MODE:", mode)
+			print("DATA BITS:", data_bits)
+			print("EXPECTED CHECKSUM:", calc_checksum(data_bits))
+			print("RECEIVED CHECKSUM:", checksum)
 			return bits_to_bytes(data_bits), mode, filetype
 
 		case '11':  # Custom mode
