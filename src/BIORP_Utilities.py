@@ -144,6 +144,17 @@ def round_to_freqs(data: list): # +- 20Hz error mrgain for data, with an 80Hz er
             rounded_list.append(500)
     return rounded_list
 
+def find_start_of_protocol(bit_data: list[str]) -> int:
+    syn_streak = 0
+    for i, b in enumerate(bit_data):
+        if b == 'SYN':
+            syn_streak += 1
+        else:
+            if syn_streak >= 20:
+                return i
+            syn_streak = 0
+    raise ValueError("Could not find start of protocol (20 SYNs not found)")
+
 
 
 
@@ -327,66 +338,85 @@ def freqs_to_bits(freqs: list[float],
 
 	return bit_tokens
 
-def bit_protocol_to_bytes(bit_data: list, custom_start: int = 0, custom_end : int = 0):
-	no_syn = [bit for bit in bit_data if bit != 'SYN']  # Remove 'SYN' tokens
+def bit_protocol_to_bytes(bit_data: list[str], custom_start: int = 0, custom_end: int = 0):
+    # Find real packet data start
+    start_idx = find_start_of_protocol(bit_data)
+    trimmed = bit_data[start_idx:]
 
-	if len(no_syn) < 2:	raise ValueError("Too few bits to determine mode.")
+    # Remove SYNs at the end
+    while trimmed and trimmed[-1] == 'SYN':
+        trimmed.pop()
 
-	mode_bits = no_syn[0:2] # Extract mode bits
-	mode = ''.join(mode_bits) # Make into string
+    # Remove any SYNs inside messages
+    no_syn = [b for b in trimmed if b != 'SYN']
 
-	match mode:  # Match for mode
-		case '00' | '01':  # Test mode and HAM mode
-			len_bits = no_syn[2:18]
-			length = int(''.join(len_bits),2)
+    if len(no_syn) < 2:
+        raise ValueError("Too few bits to determine mode.")
 
-			checksum = no_syn[18:34]
-			data_bits = no_syn[34:34+length]
+    mode_bits = no_syn[0:2]
+    mode = ''.join(mode_bits)
 
-			corrupted, corrupted_count = validate_checksum(data_bits + checksum)
-			if corrupted:
-				print("Warning: Checksum mismatch", corrupted_count, " bits wrong). Proceeding anyway for debug.")
-			print("DATA BITS:", data_bits)
-			print("EXPECTED CHECKSUM:", calc_checksum(data_bits))
-			print("RECEIVED CHECKSUM:", checksum)
-			return bits_to_bytes(data_bits), mode, None
-		
-		case '10':  # Data mode
-			len_bits = no_syn[2:34]
-			length = int(''.join(len_bits),2)
+    # Log for debgs
+    print(f"[DEBUG] MODE bits = {mode_bits} → mode = '{mode}'")
 
-			filetype_bits = no_syn[34:66] # 4 bytes = 32 bits
-			filetype = bits_to_bytes(filetype_bits).decode('utf-8', errors='replace').strip('\x00')
+    if mode in ('00', '01'):
+        len_bits = no_syn[2:18]
+        length = int(''.join(len_bits), 2)
 
-			checksum = no_syn[66:82]
-			data_bits = no_syn[82:82+length]
+        checksum_bits = no_syn[18:34]
+        data_bits = no_syn[34:34+length]
 
-			corrupted, corrupted_count = validate_checksum(data_bits + checksum)
-			if corrupted:
-				print("Warning: Checksum mismatch", corrupted_count, " bits wrong). Proceeding anyway for debug.")
+        corrupted, corrupted_count = validate_checksum(data_bits + checksum_bits)
+        if corrupted:
+            print(f"Warning: Checksum mismatch ({corrupted_count} bits wrong). Proceeding anyway.")
 
-			print("MODE:", mode)
-			print("DATA BITS:", data_bits)
-			print("EXPECTED CHECKSUM:", calc_checksum(data_bits))
-			print("RECEIVED CHECKSUM:", checksum)
-			return bits_to_bytes(data_bits), mode, filetype
+        print(f"DATA BITS: {data_bits}")
+        print(f"EXPECTED CHECKSUM: {calc_checksum(data_bits)}")
+        print(f"RECEIVED CHECKSUM: {checksum_bits}")
 
-		case '11':  # Custom mode
-			data_bits = no_syn[custom_start:custom_end]
-			return bits_to_bytes(data_bits), mode, None	
-		
-		case _:
-			raise Exception("Incorrect mode bits: ", mode)
+        return bits_to_bytes(data_bits), mode, None
+
+    elif mode == '10':
+        len_bits = no_syn[2:34]
+        length = int(''.join(len_bits), 2)
+
+        filetype_bits = no_syn[34:66]
+        filetype = bits_to_bytes(filetype_bits).decode('utf-8', errors='replace').strip('\x00')
+
+        checksum_bits = no_syn[66:82]
+        data_bits = no_syn[82:82+length]
+
+        corrupted, corrupted_count = validate_checksum(data_bits + checksum_bits)
+        if corrupted:
+            print(f"Warning: Checksum mismatch ({corrupted_count} bits wrong). Proceeding anyway.")
+
+        return bits_to_bytes(data_bits), mode, filetype
+
+    elif mode == '11':
+        data_bits = no_syn[custom_start:custom_end]
+        return bits_to_bytes(data_bits), mode, None
+
+    else:
+        raise ValueError(f"Unrecognized mode bits: '{mode}'")
 
 def handle_rx(chunk=STD_CHUNK, format=STD_FORMAT, channels=STD_CHAN, rate=STD_RATE):
-	print("Running RX script.")
-	data = np.asarray(listen_record(chunk=chunk,channels=channels, rate=rate), dtype=np.int16) # Receive audio data
-	freqs = to_dominant_freqs(data, chunk, rate) # Convert from raw data to frequencies
-	print("RX FREQ DATA: ", freqs)
-	bits = freqs_to_bits(freqs, STD_TX) # Convert from frequencies to bits
-	print("RX BIT DATA: ", bits)
-	data_bits, mode, filetype = bit_protocol_to_bytes(bits) # Extract
-	return data_bits, mode, filetype
+    print("Running RX script.")
+
+    # Record audio
+    data = np.asarray(listen_record(chunk=chunk, channels=channels, rate=rate), dtype=np.int16)
+
+    # Convert raw audio data to momentary dominant freq data
+    freqs = to_dominant_freqs(data, chunk, rate)
+    print("RX FREQ DATA: ", freqs)
+
+    # Translated freqs to bit tokens
+    bits = freqs_to_bits(freqs, STD_TX)
+    print("RX BIT DATA: ", bits)
+
+    # Extract and decode data from packet
+    data_bytes, mode, filetype = bit_protocol_to_bytes(bits)
+    
+    return data_bytes, mode, filetype
 
 
 # ------------------------- TX - TRANSMIT -------------------------
